@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>계산기</title>
+  <style>
+    /* 색상은 CSS 변수 토큰으로 관리 */
+    :root {
+      --c-canvas: #0f172a;
+      --c-panel: #1e293b;
+      --c-key: #334155;
+      --c-key-hover: #475569;
+      --c-op: #f59e0b;
+      --c-op-hover: #fbbf24;
+      --c-func: #64748b;
+      --c-func-hover: #94a3b8;
+      --c-ink: #f8fafc;
+      --c-ink-muted: #94a3b8;
+      --c-on-op: #0f172a;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--c-canvas);
+      color: var(--c-ink);
+      font-family: "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+      padding: 16px;
+    }
+
+    .calculator {
+      width: 100%;
+      max-width: 360px;
+      background: var(--c-panel);
+      border-radius: 24px;
+      padding: 20px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    /* 표시창 */
+    .display {
+      min-height: 110px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 12px 8px 16px;
+      overflow: hidden;
+    }
+
+    .expression {
+      min-height: 1.4em;
+      font-size: 1rem;
+      color: var(--c-ink-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+
+    .result {
+      font-size: clamp(2rem, 9vw, 2.8rem);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 버튼 격자 */
+    .keys {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .key {
+      aspect-ratio: 1 / 1;
+      border: none;
+      border-radius: 50%;
+      background: var(--c-key);
+      color: var(--c-ink);
+      font-size: 1.4rem;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.08s;
+      user-select: none;
+    }
+
+    .key:hover { background: var(--c-key-hover); }
+    .key:active { transform: scale(0.94); }
+    .key:focus-visible { outline: 3px solid var(--c-op); outline-offset: 2px; }
+
+    .key.func { background: var(--c-func); color: var(--c-canvas); }
+    .key.func:hover { background: var(--c-func-hover); }
+
+    .key.op { background: var(--c-op); color: var(--c-on-op); font-weight: 600; }
+    .key.op:hover { background: var(--c-op-hover); }
+
+    .key.wide {
+      grid-column: span 2;
+      aspect-ratio: auto;
+      border-radius: 999px;
+      height: 100%;
+    }
+
+    .key.wide { min-height: 0; }
+  </style>
+</head>
+<body>
+  <main class="calculator">
+    <section class="display" aria-live="polite">
+      <div class="expression" id="expression"></div>
+      <div class="result" id="result">0</div>
+    </section>
+
+    <div class="keys">
+      <button class="key func" data-action="clear" aria-label="전체 지우기">AC</button>
+      <button class="key func" data-action="sign" aria-label="부호 바꾸기">+/−</button>
+      <button class="key func" data-action="percent" aria-label="백분율">%</button>
+      <button class="key op" data-op="/" aria-label="나누기">÷</button>
+
+      <button class="key" data-digit="7">7</button>
+      <button class="key" data-digit="8">8</button>
+      <button class="key" data-digit="9">9</button>
+      <button class="key op" data-op="*" aria-label="곱하기">×</button>
+
+      <button class="key" data-digit="4">4</button>
+      <button class="key" data-digit="5">5</button>
+      <button class="key" data-digit="6">6</button>
+      <button class="key op" data-op="-" aria-label="빼기">−</button>
+
+      <button class="key" data-digit="1">1</button>
+      <button class="key" data-digit="2">2</button>
+      <button class="key" data-digit="3">3</button>
+      <button class="key op" data-op="+" aria-label="더하기">+</button>
+
+      <button class="key wide" data-digit="0">0</button>
+      <button class="key" data-action="decimal" aria-label="소수점">.</button>
+      <button class="key op" data-action="equals" aria-label="계산 결과">=</button>
+    </div>
+  </main>
+
+  <script>
+    // 계산기 상태
+    const state = {
+      current: "0",     // 화면에 표시되는 현재 입력값(문자열)
+      previous: null,   // 연산 대기 중인 앞 피연산자
+      operator: null,   // 대기 중인 연산자
+      expression: "",   // 상단에 보이는 수식
+      overwrite: false  // true면 다음 숫자 입력 시 화면을 덮어씀
+    };
+
+    const OP_SYMBOL = { "+": "+", "-": "−", "*": "×", "/": "÷" };
+    const MAX_DIGITS = 15;
+
+    const resultEl = document.getElementById("result");
+    const expressionEl = document.getElementById("expression");
+
+    // 정수부에 천 단위 쉼표를 붙여 표시
+    function formatNumber(str) {
+      if (str === "Error") return str;
+      const [intPart, decPart] = str.split(".");
+      const sign = intPart.startsWith("-") ? "-" : "";
+      const digits = intPart.replace("-", "");
+      const withComma = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      return sign + withComma + (decPart !== undefined ? "." + decPart : "");
+    }
+
+    // 부동소수점 오차 정리 (예: 0.1 + 0.2 → 0.3)
+    function normalize(num) {
+      if (!Number.isFinite(num)) return "Error";
+      return String(parseFloat(num.toPrecision(12)));
+    }
+
+    function calculate(a, b, op) {
+      switch (op) {
+        case "+": return a + b;
+        case "-": return a - b;
+        case "*": return a * b;
+        case "/": return b === 0 ? NaN : a / b;
+      }
+      return b;
+    }
+
+    function render() {
+      resultEl.textContent = formatNumber(state.current);
+      expressionEl.textContent = state.expression;
+    }
+
+    function inputDigit(digit) {
+      if (state.current === "Error") state.overwrite = true;
+      if (state.overwrite) {
+        state.current = digit;
+        state.overwrite = false;
+      } else {
+        const digitsOnly = state.current.replace(/[-.]/g, "");
+        if (digitsOnly.length >= MAX_DIGITS) return;
+        state.current = state.current === "0" ? digit : state.current + digit;
+      }
+    }
+
+    function inputDecimal() {
+      if (state.current === "Error") state.overwrite = true;
+      if (state.overwrite) {
+        state.current = "0.";
+        state.overwrite = false;
+        return;
+      }
+      if (!state.current.includes(".")) state.current += ".";
+    }
+
+    function setOperator(op) {
+      if (state.current === "Error") return;
+      // 연속으로 연산자를 누르면 앞 연산부터 처리하고 이어감
+      if (state.operator && !state.overwrite) {
+        const result = calculate(parseFloat(state.previous), parseFloat(state.current), state.operator);
+        if (!Number.isFinite(result)) return showError();
+        state.current = normalize(result);
+        state.previous = state.current;
+      } else {
+        state.previous = state.current;
+      }
+      state.operator = op;
+      state.expression = `${formatNumber(state.previous)} ${OP_SYMBOL[op]}`;
+      state.overwrite = true;
+    }
+
+    function equals() {
+      if (!state.operator || state.current === "Error") return;
+      const expr = `${formatNumber(state.previous)} ${OP_SYMBOL[state.operator]} ${formatNumber(state.current)} =`;
+      const result = calculate(parseFloat(state.previous), parseFloat(state.current), state.operator);
+      if (!Number.isFinite(result)) return showError();
+      state.expression = expr;
+      state.current = normalize(result);
+      state.previous = null;
+      state.operator = null;
+      state.overwrite = true;
+    }
+
+    function showError() {
+      state.current = "Error";
+      state.previous = null;
+      state.operator = null;
+      state.expression = "0으로 나눌 수 없습니다";
+      state.overwrite = true;
+    }
+
+    function clearAll() {
+      state.current = "0";
+      state.previous = null;
+      state.operator = null;
+      state.expression = "";
+      state.overwrite = false;
+    }
+
+    function toggleSign() {
+      if (state.current === "Error" || state.current === "0") return;
+      state.current = state.current.startsWith("-") ? state.current.slice(1) : "-" + state.current;
+    }
+
+    function percent() {
+      if (state.current === "Error") return;
+      state.current = normalize(parseFloat(state.current) / 100);
+      state.overwrite = true;
+    }
+
+    function backspace() {
+      if (state.current === "Error" || state.overwrite) return;
+      state.current = state.current.length > 1 ? state.current.slice(0, -1) : "0";
+      if (state.current === "-") state.current = "0";
+    }
+
+    // 버튼 클릭 처리
+    document.querySelector(".keys").addEventListener("click", (event) => {
+      const btn = event.target.closest("button");
+      if (!btn) return;
+
+      if (btn.dataset.digit !== undefined) inputDigit(btn.dataset.digit);
+      else if (btn.dataset.op) setOperator(btn.dataset.op);
+      else {
+        switch (btn.dataset.action) {
+          case "clear": clearAll(); break;
+          case "sign": toggleSign(); break;
+          case "percent": percent(); break;
+          case "decimal": inputDecimal(); break;
+          case "equals": equals(); break;
+        }
+      }
+      render();
+    });
+
+    // 키보드 입력 지원
+    document.addEventListener("keydown", (event) => {
+      const key = event.key;
+      if (/^[0-9]$/.test(key)) inputDigit(key);
+      else if (key === ".") inputDecimal();
+      else if (["+", "-", "*", "/"].includes(key)) setOperator(key);
+      else if (key === "Enter" || key === "=") { event.preventDefault(); equals(); }
+      else if (key === "Backspace") backspace();
+      else if (key === "Escape") clearAll();
+      else if (key === "%") percent();
+      else return;
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
